@@ -9,24 +9,51 @@ namespace App.ConsoleApp
 {
     class App
     {
-        static private readonly Dictionary<string, string> _BaseUrls = new Dictionary<string, string>();
-
+        static private readonly string baseUrl = "https://www.pokemon.com/us/pokemon-tcg/pokemon-cards/?cardName=&cardText=&evolvesFrom=&simpleSubmit=&format=unlimited&hitPointsMin=0&hitPointsMax=340&retreatCostMin=0&retreatCostMax=5&totalAttackCostMin=0&totalAttackCostMax=5&particularArtist=";
+        
         static void Main(string[] args)
         {
-            _BaseUrls.Add("cardList", "https://www.pokemon.com/us/pokemon-tcg/pokemon-cards/?cardName=&cardText=&evolvesFrom=&simpleSubmit=&format=unlimited&hitPointsMin=0&hitPointsMax=340&retreatCostMin=0&retreatCostMax=5&totalAttackCostMin=0&totalAttackCostMax=5&particularArtist=");
-            _BaseUrls.Add("cardDetail", "https://www.pokemon.com/us/pokemon-tcg/pokemon-cards/");
-
-            var ammountOfPages = _GetAmmountOfCardsPages();
-            Console.WriteLine($"There are {ammountOfPages} pages to be scrapped.");
-            Console.ReadLine();
+            Run();
         }
 
-        static private int _GetAmmountOfCardsPages()
+        private static void Run()
         {
-            var cardListWebDocument = new HtmlWeb().Load(_BaseUrls["cardList"]);
+            while(true)
+            {
+                var ammountOfPages = _GetAmmountOfCardPages();
+                Console.WriteLine($"There are {ammountOfPages} cards to be fetched.");
+                var confirm = _GetUserInput("Would you like to fetch the cards now (y/n)? ")
+                                .ToString();
+
+                if (confirm.Length > 1)
+                {
+                    _ShowError("Invalid input");
+                    break;
+                }
+
+                Console.WriteLine(confirm);
+            }
+        }
+
+        private static void _ShowError(string errorMessage)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine();
+            Console.ResetColor();
+        }
+
+        static private object _GetUserInput(string message)
+        {
+            Console.Write(message);
+            return Console.ReadLine();
+        }
+
+        static private int _GetAmmountOfCardPages()
+        {
+            var cardListWebDocument = new HtmlWeb().Load(baseUrl);
             var element = cardListWebDocument.GetElementbyId("cards-load-more");
             var numOfPages = int.Parse(element.Element("div").Element("span").InnerText.Substring(4));
-            return numOfPages; // 12 is the number of cards on a page
+            return 12 * numOfPages; // 12 is the number of cards on a page
         }
 
         static private int _GetCardsList()
