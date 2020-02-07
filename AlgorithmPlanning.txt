@@ -1,0 +1,12 @@
+STEPS:
+	1 - Get the ammount of cards pages from the website than show it.
+	2* - Confirm whether the user wants to scrap.
+		
+	* IF NOT
+		Closes the app.
+
+	* IF SO
+		
+DATAFLOW:
+	HAP data => webDataQueue => fileDataWriter => fileDataAccessQueue => outputFile.
+								fileDataReader =>
