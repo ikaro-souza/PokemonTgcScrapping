@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,106 +32,177 @@ namespace App.ConsoleApp
             _amountOfCards = GetAmountOfCards();
 
             Console.WriteLine($"There are about {_amountOfCards} cards to be fetched.");
-            GetUserInput("Would you like to fetch the cards now (y/n)? ");
+            GetUserInput("Press any key to start fetching.");
+            Console.Clear();
 
             _cardDetailsPageUrls = new BlockingCollection<string>(_amountOfCards);
             _cardDetailsPages = new BlockingCollection<HtmlDocument>(_amountOfCards);
             _cardModels = new BlockingCollection<CardModel>(_amountOfCards);
 
-            Task.Run(CardsUrlProducers);
-            Task.Run(CardsUrlConsumers);
-            //Task.Run(CardModelsProducers);
-            //Task.Run(CardModelsConsumers);
+            var startTime = DateTime.Now;
 
+            Task.Run(CardsUrlProducers).Wait();
+            Task.Run(CardModelsProducers);
+            Task.Run(CardModelsConsumers);
+
+            ShowElapsedTime("Application", startTime);
             Console.ReadLine();
+        }
+
+        private static void ShowTaskProgress(string taskName, int currentItemsCount, int totalItemsCount)
+        {
+            Console.SetCursorPosition(0, 0);
+            Console.Write("", Console.WindowWidth);
+            Console.SetCursorPosition(0, 1);
+            Console.Write("", Console.WindowWidth);
+            Console.SetCursorPosition(0, 0);
+
+            ShowLoadingMessage(taskName);
+
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.WriteLine($"{currentItemsCount} of {totalItemsCount}");
+            Console.ResetColor();
         }
 
         // Scraps each list of cards and puts each card's url on a queue 
         private static void CardsUrlProducers()
         {
-            ShowLoadingMessage("Fetching cards urls");
-            var startTime = DateTime.Now;
-
-            Parallel.For(1, _amountOfPages, (pageNumber, loopState) =>
+            try
             {
-                var pageUrl = GetCardListPageUrl(pageNumber);
-                var cardListPageDocument = new HtmlWeb().Load(pageUrl);
-                var cardListItems = cardListPageDocument.QuerySelectorAll("ul#cardResults li");
-                foreach (var cardListItem in cardListItems)
+                Task.Run(() =>
                 {
-                    var cardPageUrl = BaseUrl + cardListItem
+                    var startTime = DateTime.Now;
+                    var taskName = "Fetching cards urls";
+
+                    while (!_cardDetailsPageUrls.IsAddingCompleted)
+                    {
+                        Thread.Sleep(100);
+                        ShowTaskProgress(taskName, _cardDetailsPageUrls.Count, _amountOfCards);
+                    }
+
+                    ShowElapsedTime(taskName, startTime);
+                    return;
+                });
+
+                Parallel.For(1, _amountOfPages, (pageNumber, loopState) =>
+                {
+                    var pageUrl = GetCardListPageUrl(pageNumber);
+                    var tries = 0;
+                    HtmlDocument cardListPageDocument = null;
+                    while (cardListPageDocument is null && tries < 5)
+                    {
+                        Thread.Sleep(100);
+                        cardListPageDocument = new HtmlWeb().Load(pageUrl);
+                    }
+
+                    if (cardListPageDocument is null)
+                        ShowError($"error fetching page {pageNumber}");
+
+                    var cardListItems = cardListPageDocument.QuerySelectorAll("ul#cardResults li");
+
+                    Parallel.ForEach(cardListItems, (cardListItem, loopState) =>
+                    {
+                        var cardPageUrl = BaseUrl + cardListItem
                         .QuerySelector("a")
                         .GetAttributeValue("href", "");
-                    if (cardPageUrl != string.Empty)
-                        _cardDetailsPageUrls.Add(cardPageUrl);
-                }
-            });
 
-            _cardDetailsPageUrls.CompleteAdding();
-            ShowElapsedTime("CardsUrlProducers", startTime);
+                        _cardDetailsPageUrls.Add(cardPageUrl);
+                    });
+                });
+
+                _cardDetailsPageUrls.CompleteAdding();
+            }
+            catch (Exception e)
+            {
+                Console.Clear();
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.WriteLine(e.Message);
+                Console.ResetColor();
+            }
         }
 
-        // Scraps each card details page and puts its document on a queue
-        private static void CardsUrlConsumers()
+        private static void ShowError(string message)
         {
-            ShowLoadingMessage("Fetching cards pages");
-            var startTime = DateTime.Now;
-
-            Parallel.For(0, _amountOfPages, (pageNumber, loopState) =>
-            {
-                while(!_cardDetailsPageUrls.IsCompleted)
-                {
-                    Thread.Sleep(10);
-                    if (_cardDetailsPageUrls.Count <= 0) continue;
-
-                    var cardPageUrl = _cardDetailsPageUrls.Take();
-                    var cardPageDocument = new HtmlWeb().Load(cardPageUrl);
-                    _cardDetailsPages.Add(cardPageDocument);
-                }
-            });
-
-            _cardDetailsPages.CompleteAdding();
-            ShowElapsedTime("CardsUrlConsumers", startTime);
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            throw new Exception(message);
         }
 
         // Maps each card details page to a CardModel and put it on a queue
         private static void CardModelsProducers()
         {
-            ShowLoadingMessage("Mapping cards models");
-            var startTime = DateTime.Now;
 
-            Parallel.For(0, _amountOfPages, (i, loopState) =>
+            Task.Run(() =>
             {
-                while (!_cardDetailsPages.IsCompleted)
-                {
-                    Thread.Sleep(10);
-                    if (_cardDetailsPages.Count <= 0) continue;
+                Thread.Sleep(1500);
+                Console.Clear();
+                var startTime = DateTime.Now;
+                var taskName = "Mapping cards models";
 
-                    var cardPage = _cardDetailsPages.Take();
+                while (!_cardModels.IsAddingCompleted)
+                {
+                    Thread.Sleep(100);
+                    ShowTaskProgress(taskName, _cardModels.Count, _amountOfCards);
+                }
+
+                ShowElapsedTime(taskName, startTime);
+            });
+
+            Parallel.For(0, _amountOfCards, (i, loopState) =>
+            {
+                while (!_cardDetailsPageUrls.IsCompleted)
+                {
+                    if (_cardDetailsPageUrls.Count <= 0) continue;
+
+                    var cardPageUrl = _cardDetailsPageUrls.Take();
+                    var tries = 0;
+                    HtmlDocument cardPage = null;
+
+                    while (cardPage is null && tries < 5)
+                    {
+                        Thread.Sleep(100);
+                        cardPage = new HtmlWeb().Load(cardPageUrl);
+                    }
+
+                    if (cardPage is null)
+                        ShowError("error fetching card");
+
                     var cardModel = Mapper.CardModelFrom(cardPage.DocumentNode);
                     _cardModels.Add(cardModel);
                 }
             });
 
             _cardModels.CompleteAdding();
-            ShowElapsedTime("CardModelsProducers", startTime);
         }
 
         // Serializes each CardModel and saves it in the cards.json file
         private static void CardModelsConsumers()
         {
-            ShowLoadingMessage("Saving cards to file");
             var startTime = DateTime.Now;
+            var taskName = "Saving cards to file";
+            var pagesCount = 0;
+            Thread.Sleep(1500);
+            Console.Clear();
+
+            Directory.CreateDirectory("cards");
 
             while (!_cardModels.IsCompleted)
             {
-                Thread.Sleep(10);
-                if (_cardModels.Count <= 0) continue;
+                if (_cardModels.Count <= 12) continue;
 
-                Console.WriteLine(JsonConvert.SerializeObject(_cardModels.Take(), Formatting.Indented));
+                pagesCount++;    
+                using var fileStreamWriter = File.AppendText($"./cards/cards{pagesCount.ToString().PadLeft(3, '0')}.json");
+                var cards = new List<CardModel>();
+
+                while (cards.Count < 12)
+                {
+                    cards.Add(_cardModels.Take());
+                }
+
+                var jsonCards = JsonConvert.SerializeObject(cards, Formatting.Indented);
+                fileStreamWriter.Write(jsonCards);
             }
 
-            ShowElapsedTime("CardModelsConsumers", startTime);
+            ShowElapsedTime(taskName, startTime);
         }
 
         private static object GetUserInput(string message)
@@ -143,7 +215,7 @@ namespace App.ConsoleApp
         {
             var element = CardListDocument.QuerySelector("div#cards-load-more > div > span");
             var numOfPages = int.Parse(element.InnerText.Substring(4));
-            _amountOfPages = 100;
+            _amountOfPages = numOfPages;
         }
 
         private static int GetAmountOfCards()
@@ -165,7 +237,7 @@ namespace App.ConsoleApp
 
         private static void ShowLoadingMessage(string text = "Loading")
         {
-            Console.ForegroundColor = ConsoleColor.DarkGreen;
+            Console.ForegroundColor = ConsoleColor.Blue;
             Console.WriteLine($"{text}... (Press ctrl+c to exit the application)");
             Console.ResetColor();
         }
@@ -173,7 +245,7 @@ namespace App.ConsoleApp
         private static void ShowElapsedTime(string taskName, DateTime startTime)
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"{taskName} task finished after {(DateTime.Now - startTime).Seconds} seconds.");
+            Console.WriteLine($"{taskName} task finished after {(DateTime.Now - startTime).TotalSeconds} seconds.");
             Console.ResetColor();
         }
     }
