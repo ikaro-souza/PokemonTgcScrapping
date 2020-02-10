@@ -4,13 +4,15 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Models;
 
 namespace App.ConsoleApp
 {
     class App
     {
-        static private readonly string baseUrl = "https://www.pokemon.com/us/pokemon-tcg/pokemon-cards/?cardName=&cardText=&evolvesFrom=&simpleSubmit=&format=unlimited&hitPointsMin=0&hitPointsMax=340&retreatCostMin=0&retreatCostMax=5&totalAttackCostMin=0&totalAttackCostMax=5&particularArtist=";
-        
+        private const string BaseUrl = "https://www.pokemon.com/us/pokemon-tcg/pokemon-cards/?cardName=&cardText=&evolvesFrom=&simpleSubmit=&format=unlimited&hitPointsMin=0&hitPointsMax=340&retreatCostMin=0&retreatCostMax=5&totalAttackCostMin=0&totalAttackCostMax=5&particularArtist=";
+        private static BlockingCollection<CardModel> Cards;
+        private static 
         static void Main(string[] args)
         {
             Run();
@@ -18,50 +20,64 @@ namespace App.ConsoleApp
 
         private static void Run()
         {
+            var amountOfPages = _GetAmountOfCardPages();
+            Console.WriteLine($"There are {amountOfPages} cards to be fetched.");
+            
             while(true)
             {
-                var ammountOfPages = _GetAmmountOfCardPages();
-                Console.WriteLine($"There are {ammountOfPages} cards to be fetched.");
-                var confirm = _GetUserInput("Would you like to fetch the cards now (y/n)? ")
-                                .ToString();
-
-                if (confirm.Length > 1)
+                var confirm = _GetUserInput("Would you like to fetch the cards now (y/n)? ").ToString();
+                if (confirm.Length > 1 || !(confirm.StartsWith('y') || confirm.StartsWith('n')))
                 {
                     _ShowError("Invalid input");
+                }
+                else if (confirm.StartsWith('n'))
+                {
                     break;
                 }
-
-                Console.WriteLine(confirm);
+                else
+                {
+                    _FetchCardList();
+                }
             }
         }
 
         private static void _ShowError(string errorMessage)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine();
+            Console.WriteLine(errorMessage);
             Console.ResetColor();
         }
 
-        static private object _GetUserInput(string message)
+        private static object _GetUserInput(string message)
         {
             Console.Write(message);
             return Console.ReadLine();
         }
 
-        static private int _GetAmmountOfCardPages()
+        private static int _GetAmountOfCardPages()
         {
-            var cardListWebDocument = new HtmlWeb().Load(baseUrl);
+            _ShowLoadingMessage();
+            
+            var cardListWebDocument = new HtmlWeb().Load(BaseUrl);
             var element = cardListWebDocument.GetElementbyId("cards-load-more");
             var numOfPages = int.Parse(element.Element("div").Element("span").InnerText.Substring(4));
+            
+            Console.Clear();
             return 12 * numOfPages; // 12 is the number of cards on a page
         }
 
-        static private int _GetCardsList()
+        private static void _ShowLoadingMessage()
         {
-            return 0;
+            Console.WriteLine("Loading... (Press ctrl+c to exit the application)");
         }
 
-        static private int _GetCardDetail()
+        private static void _FetchCardList()
+        {
+            _ShowLoadingMessage();
+            Cards = new BlockingCollection<CardModel>();
+        }
+
+        private static int _GetCardDetail()
         {
             return 0;
         }
