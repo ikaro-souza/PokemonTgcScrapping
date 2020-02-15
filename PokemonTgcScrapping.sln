@@ -4,9 +4,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 16.0.29709.97
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "App", "App", "{E623321F-C294-4179-BA5C-BC208CFE2E40}"
-	ProjectSection(SolutionItems) = preProject
-		AlgorithmPlanning.txt = AlgorithmPlanning.txt
-	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Platform", "Platform", "{1A709C65-FC88-41DE-BD16-BD610E335F81}"
 EndProject

@@ -25,8 +25,6 @@ namespace App.ConsoleApp
 
         public static void Main(string[] args)
         {
-            Console.WriteLine("EAE");
-            Console.ReadLine();
             Run();
         }
 
@@ -85,7 +83,7 @@ namespace App.ConsoleApp
             }
             catch (IOException e)
             {
-                Console.WriteLine(e.Message);
+                Console.WriteLine("You don't have any saved cards yet. (Press any key to return to menu)");
             }
         }
 
