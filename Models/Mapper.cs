@@ -5,20 +5,20 @@ namespace Models
 {
     public static class Mapper
     {
-        public static CardModel CardModelFrom(HtmlNode cardPageNode)
+        public static CardModel CardModelFrom(HtmlDocument cardPage, string cardUrl)
         {
-            var cardName = cardPageNode
+            var cardName = cardPage
                 .QuerySelector("div.card-description div h1")
                 .InnerText;
-            var cardImgUrl = cardPageNode
+            
+            var cardImgUrl = cardPage
                 .QuerySelector("div.card-image img")
                 .Attributes["src"].Value;
 
-            var cardStatsFooterElement = cardPageNode.QuerySelector("div.stats-footer");
+            var cardStatsFooterElement = cardPage.QuerySelector("div.stats-footer");
             var cardCode = cardStatsFooterElement
                 .QuerySelector("span")
-                .InnerText
-                .Substring(0, 3);
+                .InnerText;
             var cardExpansion = cardStatsFooterElement
                 .QuerySelector("a")
                 .InnerText
@@ -29,7 +29,8 @@ namespace Models
                 Code = cardCode,
                 Name = cardName,
                 Expansion = cardExpansion,
-                ImgUrl = cardImgUrl
+                ImgUrl = cardImgUrl,
+                CardUrl = cardUrl
             };
         }
     }

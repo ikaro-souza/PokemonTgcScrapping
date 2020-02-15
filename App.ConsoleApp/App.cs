@@ -4,7 +4,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,180 +13,319 @@ namespace App.ConsoleApp
 {
     class App
     {
-        private static readonly string _baseUrl = "https://www.pokemon.com";
-        private static int _numberOfPages = 0;
-        private static int _numberOfCards = 0;
+        private static readonly object ConsoleWriterLock = new object();
 
-        private static BlockingCollection<string> _fetchCardPageUrls;
-        private static BlockingCollection<Task> _cardModelingTasks;
+        private const string BaseUrl = "https://www.pokemon.com";
+        private static int _amountOfCardListPages;
+        private static int _amountOfCards;
+
+        private static BlockingCollection<string> _cardsUrls;
         private static BlockingCollection<CardModel> _cardModels;
+        private static int _amountOfCardsInList;
 
-        static void Main(string[] args)
+        public static void Main(string[] args)
         {
-            ShowLoadingMessage("Getting current amount of cards");
-            SetNumberOfCards();
+            Console.WriteLine("EAE");
+            Console.ReadLine();
+            Run();
+        }
 
-            _fetchCardPageUrls = new BlockingCollection<string>(_numberOfCards);
-            _cardModelingTasks = new BlockingCollection<Task>(_numberOfCards);
-            _cardModels = new BlockingCollection<CardModel>(_numberOfCards);
-            
-            Console.WriteLine($"There are currently about {_numberOfCards} cards in the game.");
-            Console.Write("Would you like to fetch'em now? (y/n) ");
-            var answer = Console.ReadLine();
-
-            if (answer != "y")
+        private static void Run()
+        {
+            while (true)
             {
-                Console.WriteLine("Alright then, bye.");
+                Console.Clear();
+                Console.WriteLine(" Pokemon TCG Scrapper ".PadLeft(80, '-').PadRight(150, '-'));
+                Console.WriteLine("1. Fetch cards");
+                Console.WriteLine("2. Show amount of cards already fetched");
+                Console.WriteLine("3. Leave");
+                Console.Write("Choose: ");
+                
+                try
+                {
+                    var choice = int.Parse(Console.ReadLine() ?? throw new Exception());
+                    if (choice <= 0) throw new Exception();
+
+                    switch (choice)
+                    {
+                        case 3:
+                            return;
+                        
+                        case 2:
+                            ShowCardsCount();
+                            Console.ReadLine();
+                            Run();
+                            break;
+                        
+                        case 1:
+                            Fetch();
+                            Run();
+                            break;
+                        
+                        default:
+                            throw new Exception();
+                    }
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("Invalid input. Press any key to try again.");
+                    Console.ReadLine();
+                    Console.Clear();
+                }
+            }
+        }
+
+        private static void ShowCardsCount()
+        {
+            try
+            {
+                using var reader = new StreamReader(File.OpenRead("./PokemonCards.json"));
+                var cards = JsonConvert.DeserializeObject<IEnumerable<CardModel>>(reader.ReadToEnd());
+                Console.WriteLine($"You've saved {cards.Count()} locally.");
+            }
+            catch (IOException e)
+            {
+                Console.WriteLine(e.Message);
+            }
+        }
+
+        private static void Fetch()
+        {
+            Console.WriteLine("Loading...");
+            
+            SetAmountOfCards();
+            _cardsUrls = new BlockingCollection<string>(_amountOfCards);
+            _cardModels = new BlockingCollection<CardModel>(_amountOfCards);
+            
+            Console.WriteLine($"There are {_amountOfCardListPages} pages, each containing up to 12 cards.");
+            Console.Write("Want to fetch'em now? (y/n) ");
+            var shouldFetchCards = Console.ReadLine()?.ToLower() == "y";
+            
+            if (!shouldFetchCards)
+            {
+                Console.WriteLine("Alright, see you later.");
                 return;
             }
-
-            var stopwatch = new Stopwatch();
-            stopwatch.Start();
-
+            
+            while (true)
+            {
+                try
+                {            
+                    Console.Clear();
+                    Console.Write("How many? ");
+                    
+                    var amountOfPages = int.Parse(Console.ReadLine() ?? throw new Exception());
+                    if (amountOfPages < 0)
+                        throw new Exception();
+                    
+                    SetAmountOfCards(amountOfPages);
+                    break;
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("Invalid input. (press any key to try again)");
+                    Console.Read();
+                }
+            }
+            
             FetchCards();
-
-            stopwatch.Stop();
-            Console.WriteLine($"Fetched {(_numberOfCards / stopwatch.Elapsed.TotalSeconds).ToString("n2")} cards/s.");
         }
 
-        private static void SetNumberOfCards()
+        private static string GetCardListPageUrl(int pageNumber = 1)
         {
-            var cardListPage = GetCardsListPage(1);
-            var cardListItems = GetCardsListItems(cardListPage);
-            //_numberOfPages = int.Parse(cardListPage
-            //    .QuerySelector("#cards-load-more > div > span")
-            //    .InnerText
-            //    .Substring(5));
-            _numberOfPages = 10;
-            _numberOfCards = _numberOfPages * cardListItems.Count;
+            return BaseUrl +
+                   $"/us/pokemon-tcg/pokemon-cards/{pageNumber}?cardName=&cardText=&evolvesFrom=&simpleSubmit=&format=unlimited&hitPointsMin=0&hitPointsMax=340&retreatCostMin=0&retreatCostMax=5&totalAttackCostMin=0&totalAttackCostMax=5&particularArtist=";
         }
 
-        private static string GetCardListPageUrl(int pageNumber)
+        private static string GetCardPageUrl(string cardUrl)
         {
-            return string.Concat(_baseUrl, $"/us/pokemon-tcg/pokemon-cards/{pageNumber}?cardName=&cardText=&evolvesFrom=&simpleSubmit=&format=unlimited&hitPointsMin=0&hitPointsMax=340&retreatCostMin=0&retreatCostMax=5&totalAttackCostMin=0&totalAttackCostMax=5&particularArtist=");
+            return BaseUrl + cardUrl;
         }
 
-        private static HtmlDocument GetCardsListPage(int pageNumber)
+        private static void SetAmountOfCards(int pages = -1)
         {
-            return new HtmlWeb().Load(GetCardListPageUrl(pageNumber));
-        }
+            if (pages < 0)
+            {
+                var cardListPage = new HtmlWeb().Load(GetCardListPageUrl());
+                var amountOfPages = int.Parse(
+                    cardListPage
+                        .QuerySelector("div#cards-load-more > div > span")
+                        .InnerText
+                        .Substring(5)
+                );
+                _amountOfCardsInList = cardListPage.QuerySelectorAll("#cardResults li").Count;
+                _amountOfCardListPages = amountOfPages;
+            }
+            else
+            {
+                _amountOfCardListPages = pages;
+            }
+            
+            _amountOfCards = _amountOfCardsInList * _amountOfCardListPages;
 
-        private static IList<HtmlNode> GetCardsListItems(HtmlDocument cardListPage)
-        {
-            return cardListPage.QuerySelectorAll("#cardResults li");
-        }
-
-        private static IList<HtmlNode> GetCardsListItems(int pageNumber)
-        {
-            return GetCardsListPage(pageNumber).QuerySelectorAll("#cardResults li");
-        }
-
-        private static void ShowLoadingMessage(string message)
-        {
-            Console.Clear();
-            Console.ForegroundColor = ConsoleColor.Blue;
-            Console.WriteLine($"{message}...");
-            Console.ResetColor();
-        }
-
-        private static void ResetConsoleCursorPosition()
-        {
-            Console.SetCursorPosition(0, 0);
-        }
-
-        private static void ShowTaskProgress(string message, int currentCount, int maxCount)
-        {
-            message = $"{message} ({currentCount} of {maxCount})";
-            ShowLoadingMessage(message);
         }
 
         private static void FetchCards()
         {
-            FetchCardPageUrls();
-            MapCardModels();
+            Task.Run(GetCardsUrls);
+            Task.Run(MapCardModels);
+            Task.Run(SaveCards).Wait();
         }
 
-        private static void FetchCardPageUrls()
+        private static void GetCardsUrls()
         {
-            ShowLoadingMessage("Fetching card page urls");
-
-            Parallel.For(1, _numberOfPages + 1, pageNumber =>
+            var amountProcessed = 0;
+            var progressTrackingTask = Task.Run(() =>
             {
-                var cardListItems = GetCardsListItems(pageNumber);
-                foreach (var cardListItem in cardListItems)
+                while (!_cardsUrls.IsAddingCompleted)
                 {
-                    var cardPageUrl = string.Concat(_baseUrl,cardListItem.QuerySelector("a").Attributes["href"].Value);
-                    _fetchCardPageUrls.Add(cardPageUrl);
+                    Thread.Sleep(100);
+
+                    lock (ConsoleWriterLock)
+                    {
+                        Console.SetCursorPosition(0, 0);
+                        Console.Write($"Fetching cards urls... {amountProcessed} of {_amountOfCards}".PadRight(Console.WindowWidth, ' '));
+                    }
+                }
+
+                lock (ConsoleWriterLock)
+                {
+                    Console.SetCursorPosition(0, 0);
+                    Console.Write("Fetching cards urls completed!".PadRight(Console.WindowWidth, ' '));
                 }
             });
 
-            _fetchCardPageUrls.CompleteAdding();
-            Console.WriteLine("Done fetching the cards urls");
+            Parallel.For(1, _amountOfCardListPages + 1, pageNumber =>
+            {
+                var pageDocument = new HtmlWeb().Load(GetCardListPageUrl(pageNumber));
+                var cardListItems = pageDocument.QuerySelectorAll("#cardResults li");
+
+                foreach (var cardListItem in cardListItems)
+                {
+                    var cardUrl = cardListItem
+                        .QuerySelector("a")
+                        .Attributes["href"].Value;
+                    cardUrl = GetCardPageUrl(cardUrl);
+                    _cardsUrls.Add(cardUrl);
+
+                    lock ((object)amountProcessed)
+                    {
+                        amountProcessed++;
+                    }
+                }
+            });
+
+            _cardsUrls.CompleteAdding();
+            progressTrackingTask.Wait();
         }
 
         private static void MapCardModels()
         {
-            Task.Run(() =>
+            var amountProcessed = 0;
+            var progressTrackingTask = Task.Run(() =>
             {
-                while (!_cardModelingTasks.IsCompleted)
+                while (!_cardModels.IsAddingCompleted)
                 {
                     Thread.Sleep(100);
-                    ShowTaskProgress("Mapping card models", _cardModelingTasks.Count, _numberOfCards);
+
+                    lock (ConsoleWriterLock)
+                    {
+                        Console.SetCursorPosition(0, 1);
+                        Console.Write($"Mapping cards models... {amountProcessed} of {_amountOfCards}".PadRight(Console.WindowWidth, ' '));
+                    }
+                }
+
+                lock (ConsoleWriterLock)
+                {
+                    Console.SetCursorPosition(0, 1);
+                    Console.Write("Mapping card models completed!".PadRight(Console.WindowWidth, ' '));
                 }
             });
 
-            var tasksGeneratorTask = Task.Run(GenerateCardModelingTasks);
-            var cardModelMappingTask = Task.Run(ExecuteCardModelingTasks);
+            var batchTasksCount = _amountOfCards / 4;
+            var batchesCount = 1;
+            while (batchesCount <= 4)
+            {
+                // Creates and populates the tasks list
+                var tasks = new List<Task>(batchTasksCount);
+                while (tasks.Count < batchTasksCount)
+                {
+                    tasks.Add(new Task(() =>
+                    {
+                        var cardUrl = _cardsUrls.Take();
+                        var cardModel = Mapper.CardModelFrom(new HtmlWeb().Load(cardUrl), cardUrl);
+                        _cardModels.Add(cardModel);
+                        amountProcessed++;
+                    }, TaskCreationOptions.AttachedToParent));
+                }
+                
+                // Starts the batch tasks and wait for them to finish
+                tasks.ForEach(task => task.Start());
+                var tasksFinished = Task.WhenAll(tasks);
+                tasksFinished.Wait();
+                
+                // Increments batchesCount
+                batchesCount++;
+            }
 
             _cardModels.CompleteAdding();
+            progressTrackingTask.Wait();
         }
 
-        private static void GenerateCardModelingTasks()
+        static void SaveCards()
         {
-            static CardModel MapCardModel(string cardPageUrl)
+            var amountProcessed = 0;
+            var progressTrackingTask = Task.Run(() =>
             {
-                var cardPage = new HtmlWeb().Load(cardPageUrl);
-                return Mapper.CardModelFrom(cardPage);
-            }
-
-            foreach (var cardPageUrl in _fetchCardPageUrls)
-            {
-                _cardModelingTasks.Add(new Task(() =>
+                while (amountProcessed < _amountOfCards)
                 {
+                    if (_cardModels.IsAddingCompleted && amountProcessed == 0) break;
+                    
+                    Thread.Sleep(100);
 
-                    var cardModel = MapCardModel(cardPageUrl);
-                    //Console.WriteLine(JsonConvert.SerializeObject(cardModel));
-                    _cardModels.Add(cardModel);
-                }, TaskCreationOptions.AttachedToParent));
-            }
-
-            _cardModelingTasks.CompleteAdding();
-        }
-
-        private static void ExecuteCardModelingTasks()
-        {
-            var tasksResult = Task.WhenAll(_cardModelingTasks);
-
-            while (!_cardModelingTasks.IsCompleted)
-            {
-                Thread.Sleep(50);
-
-                if (_cardModelingTasks.Count < 12)
-                {
-                    if (!_cardModelingTasks.IsAddingCompleted)
-                        continue;
+                    lock (ConsoleWriterLock)
+                    {
+                        Console.SetCursorPosition(0, 2);
+                        Console.WriteLine($"Saving cards to file... {amountProcessed} of {_amountOfCards}".PadRight(Console.WindowWidth, ' '));
+                    }
                 }
 
-                var amountOfTasksToTake = _cardModelingTasks.Count >= 12 ? 12 : _cardModelingTasks.Count;
-                for (int i = 0; i < amountOfTasksToTake; i++)
+                lock (ConsoleWriterLock)
                 {
-                    var task = _cardModelingTasks.Take();
-                    task.Start();
+                    Console.SetCursorPosition(0, 2);
+                    Console.WriteLine("Saving cards to file completed!".PadRight(Console.WindowWidth, ' '));
+                }
+            });
+
+            while (!_cardModels.IsCompleted)
+            {
+                if (_cardModels.Count <= 0) continue;
+                
+                using var readStream = File.Open("./PokemonCards.json", FileMode.OpenOrCreate, FileAccess.Read);
+                using var streamReader = new StreamReader(readStream);
+                var contentAlreadyInFile = streamReader.ReadToEnd();
+                        
+                var cards = JsonConvert.DeserializeObject<List<CardModel>>(contentAlreadyInFile);
+                cards ??= new List<CardModel>();
+                var cardModel = _cardModels.Take();
+                
+                if (cards.Any(card => card.Code == cardModel.Code)) continue;
+                cards.Add(cardModel);
+                
+                readStream.Close();
+                readStream.Dispose();
+                
+                using var writeStream = File.Open("./PokemonCards.json", FileMode.Create, FileAccess.Write);
+                using var streamWriter = new StreamWriter(writeStream);
+                streamWriter.Write(JsonConvert.SerializeObject(cards.OrderBy(card => card.Expansion).ThenBy(card => card.Name)));
+                        
+                lock ((object) amountProcessed)
+                {
+                    amountProcessed++;
                 }
             }
-
-            tasksResult.Wait();
-            _cardModels.CompleteAdding();
+            
+            progressTrackingTask.Wait();
         }
     }
 }
