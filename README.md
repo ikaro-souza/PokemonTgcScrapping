@@ -1,4 +1,4 @@
-# PokemonTcgScrapping
+# PokemonTcgScraping
 Fitbank Challenge #1.
 
 Program that scraps the website https://www.pokemon.com/us/ asynchronously to store the curret in-game cards in a local json file.
