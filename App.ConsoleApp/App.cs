@@ -19,6 +19,11 @@ namespace App.ConsoleApp
         private static int _amountOfCardListPages;
         private static int _amountOfCards;
 
+        private const string CardsDirectoryPath = "./cards/";
+        private const string SingleFilePath = CardsDirectoryPath + "PokemonCards.json";
+        private static readonly object SingleFileLocker = new object();
+        private static bool _saveInSingleFile;
+
         private static BlockingCollection<string> _cardsUrls;
         private static BlockingCollection<CardModel> _cardModels;
         private static int _amountOfCardsInList;
@@ -52,12 +57,10 @@ namespace App.ConsoleApp
                         case 2:
                             ShowCardsCount();
                             Console.ReadLine();
-                            Run();
                             break;
                         
                         case 1:
                             Fetch();
-                            Run();
                             break;
                         
                         default:
@@ -75,13 +78,15 @@ namespace App.ConsoleApp
 
         private static void ShowCardsCount()
         {
+            Directory.CreateDirectory(CardsDirectoryPath);
+            
             try
             {
-                using var reader = new StreamReader(File.OpenRead("./PokemonCards.json"));
-                var cards = JsonConvert.DeserializeObject<IEnumerable<CardModel>>(reader.ReadToEnd());
-                Console.WriteLine($"You've saved {cards.Count()} locally.");
+                using var reader = new StreamReader(SingleFilePath);
+                var cards = JsonConvert.DeserializeObject<ICollection<CardModel>>(reader.ReadToEnd());
+                Console.WriteLine($"You've saved {cards.Count} cards locally.");
             }
-            catch (IOException e)
+            catch (Exception)
             {
                 Console.WriteLine("You don't have any saved cards yet. (Press any key to return to menu)");
             }
@@ -99,23 +104,26 @@ namespace App.ConsoleApp
             Console.Write("Want to fetch'em now? (y/n) ");
             var shouldFetchCards = Console.ReadLine()?.ToLower() == "y";
             
-            if (!shouldFetchCards)
-            {
-                Console.WriteLine("Alright, see you later.");
-                return;
-            }
+            if (!shouldFetchCards) return;
             
+            SetAmountOfPages();
+            SetSavingMode();
+            FetchCards();
+        }
+
+        private static void SetAmountOfPages()
+        {
             while (true)
             {
                 try
-                {            
+                {
                     Console.Clear();
                     Console.Write("How many? ");
-                    
+
                     var amountOfPages = int.Parse(Console.ReadLine() ?? throw new Exception());
                     if (amountOfPages < 0)
                         throw new Exception();
-                    
+
                     SetAmountOfCards(amountOfPages);
                     break;
                 }
@@ -125,8 +133,36 @@ namespace App.ConsoleApp
                     Console.Read();
                 }
             }
-            
-            FetchCards();
+        }
+
+        private static void SetSavingMode()
+        {
+            while (true)
+            {
+                try
+                {
+                    Console.Write("How do you want to save the cards? (\"s\" for single file or \"m\" multiple) ");
+                    var input = Console.ReadLine()?.ToLower() ?? throw new Exception();
+                    
+                    if (input != "s" && input != "m")
+                        throw new Exception();
+
+                    _saveInSingleFile = input switch
+                    {
+                        "s" => true,
+                        "m" => false,
+                        _ => throw new Exception()
+                    };
+                    
+                    break;
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("Invalid input. (press any key to try again)");
+                    Console.Read();
+                    Console.Clear();
+                }
+            }
         }
 
         private static string GetCardListPageUrl(int pageNumber = 1)
@@ -168,16 +204,19 @@ namespace App.ConsoleApp
             Task.Run(GetCardsUrls);
             Task.Run(MapCardModels);
             Task.Run(SaveCards).Wait();
+
+            Console.Write("Finished fetching the cards, press any key to return to menu.");
+            Console.ReadLine();
         }
 
         private static void GetCardsUrls()
         {
             var amountProcessed = 0;
-            var progressTrackingTask = Task.Run(() =>
+            var progressTrackingTask = Task.Run(async () =>
             {
                 while (!_cardsUrls.IsAddingCompleted)
                 {
-                    Thread.Sleep(100);
+                    await Task.Delay(100);
 
                     lock (ConsoleWriterLock)
                     {
@@ -220,11 +259,13 @@ namespace App.ConsoleApp
         private static void MapCardModels()
         {
             var amountProcessed = 0;
-            var progressTrackingTask = Task.Run(() =>
+            var progressTrackingTask = Task.Run(async () =>
             {
                 while (!_cardModels.IsAddingCompleted)
                 {
-                    Thread.Sleep(100);
+                    if (_cardModels.IsCompleted && amountProcessed < _cardModels.Count) break;
+                    
+                    await Task.Delay(100);
 
                     lock (ConsoleWriterLock)
                     {
@@ -270,16 +311,16 @@ namespace App.ConsoleApp
             progressTrackingTask.Wait();
         }
 
-        static void SaveCards()
+        private static void SaveCards()
         {
             var amountProcessed = 0;
-            var progressTrackingTask = Task.Run(() =>
+            var progressTrackingTask = Task.Run(async () =>
             {
                 while (amountProcessed < _amountOfCards)
                 {
-                    if (_cardModels.IsAddingCompleted && amountProcessed == 0) break;
+                    if (_cardModels.IsCompleted) break;
                     
-                    Thread.Sleep(100);
+                    await Task.Delay(100);
 
                     lock (ConsoleWriterLock)
                     {
@@ -294,36 +335,75 @@ namespace App.ConsoleApp
                     Console.WriteLine("Saving cards to file completed!".PadRight(Console.WindowWidth, ' '));
                 }
             });
+            
+            Directory.CreateDirectory(CardsDirectoryPath);
 
+            if (_saveInSingleFile)
+            {
+                if (!File.Exists(SingleFilePath)) File.Open(SingleFilePath, FileMode.Create, FileAccess.ReadWrite);
+                
+                Task.WhenAll(
+                    Task.Run(() => SaveCardsInSingleFile(ref amountProcessed)), 
+                    Task.Run(() => SaveCardsInSingleFile(ref amountProcessed))
+                ).Wait();
+            }
+            else
+            {
+                Task.WhenAll(
+                    Task.Run(() => SaveEachCardInItsOwnFile(ref amountProcessed)), 
+                    Task.Run(() => SaveEachCardInItsOwnFile(ref amountProcessed))
+                ).Wait(); 
+            } 
+
+            progressTrackingTask.Wait();
+        }
+
+        private static void SaveEachCardInItsOwnFile(ref int amountProcessed)
+        {
             while (!_cardModels.IsCompleted)
             {
                 if (_cardModels.Count <= 0) continue;
-                
-                using var readStream = File.Open("./PokemonCards.json", FileMode.OpenOrCreate, FileAccess.Read);
-                using var streamReader = new StreamReader(readStream);
-                var contentAlreadyInFile = streamReader.ReadToEnd();
-                        
-                var cards = JsonConvert.DeserializeObject<List<CardModel>>(contentAlreadyInFile);
-                cards ??= new List<CardModel>();
+
                 var cardModel = _cardModels.Take();
+                var cardFilePath = GetCardFilePath(cardModel.Name);
+                File.WriteAllText(cardFilePath, JsonConvert.SerializeObject(cardModel, Formatting.Indented));
                 
-                if (cards.Any(card => card.Code == cardModel.Code)) continue;
-                cards.Add(cardModel);
-                
-                readStream.Close();
-                readStream.Dispose();
-                
-                using var writeStream = File.Open("./PokemonCards.json", FileMode.Create, FileAccess.Write);
-                using var streamWriter = new StreamWriter(writeStream);
-                streamWriter.Write(JsonConvert.SerializeObject(cards.OrderBy(card => card.Expansion).ThenBy(card => card.Name)));
-                        
                 lock ((object) amountProcessed)
                 {
                     amountProcessed++;
                 }
             }
-            
-            progressTrackingTask.Wait();
+        }
+
+        private static string GetCardFilePath(string modelName) => string.Concat(CardsDirectoryPath, modelName, ".json");
+
+        private static void SaveCardsInSingleFile(ref int amountProcessed)
+        {
+            while (!_cardModels.IsCompleted)
+            {
+                if (_cardModels.Count <= 0) continue;
+
+                lock (SingleFileLocker)
+                {
+                    var cardsFileStreamReader = new StreamReader(SingleFilePath);
+                    var cardsInFile = cardsFileStreamReader.ReadToEnd();
+                    cardsFileStreamReader.Close();
+                    cardsFileStreamReader.Dispose();
+                    
+                    var cards = JsonConvert.DeserializeObject<List<CardModel>>(cardsInFile);
+                    cards ??= new List<CardModel>();
+                    var cardModel = _cardModels.Take();
+
+                    if (cards.Any(card => card.Code == cardModel.Code)) continue;
+                    
+                    cards.Add(cardModel);
+                    cards = cards.OrderBy(card => card.Expansion).ThenBy(card => card.Name).ToList();
+                    
+                    File.WriteAllText(SingleFilePath, JsonConvert.SerializeObject(cards));
+
+                    lock ((object) amountProcessed) amountProcessed++;
+                }
+            }
         }
     }
 }
