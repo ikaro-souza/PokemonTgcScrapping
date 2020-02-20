@@ -1,11 +1,12 @@
 ﻿using System;
+using System.Net.Http;
 using HtmlAgilityPack;
 
 namespace Models
 {
     public static class Mapper
     {
-        public static CardModel CardModelFrom(HtmlDocument cardPage, string cardUrl)
+        public static CardModel CardModelFrom(HtmlDocument cardPage)
         {
             var cardName = cardPage
                 .QuerySelector("div.card-description div h1")
@@ -29,8 +30,7 @@ namespace Models
                 Code = cardCode,
                 Name = cardName,
                 Expansion = cardExpansion,
-                ImgUrl = cardImgUrl,
-                CardUrl = cardUrl
+                Image = Convert.ToBase64String(new HttpClient().GetByteArrayAsync(cardImgUrl).Result)
             };
         }
     }

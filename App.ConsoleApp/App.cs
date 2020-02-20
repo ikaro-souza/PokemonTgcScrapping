@@ -28,20 +28,19 @@ namespace App.ConsoleApp
         private static BlockingCollection<CardModel> _cardModels;
         private static int _amountOfCardsInList;
 
-        public static void Main(string[] args)
+        public static async Task Main(string[] args)
         {
-            Run();
+            await Run();
         }
 
-        private static void Run()
+        private static async Task Run()
         {
             while (true)
             {
                 Console.Clear();
                 Console.WriteLine(" Pokemon TCG Scrapper ".PadLeft(80, '-').PadRight(150, '-'));
                 Console.WriteLine("1. Fetch cards");
-                Console.WriteLine("2. Show amount of cards already fetched");
-                Console.WriteLine("3. Leave");
+                Console.WriteLine("2. Leave");
                 Console.Write("Choose: ");
                 
                 try
@@ -51,16 +50,11 @@ namespace App.ConsoleApp
 
                     switch (choice)
                     {
-                        case 3:
+                        case 2:
                             return;
                         
-                        case 2:
-                            ShowCardsCount();
-                            Console.ReadLine();
-                            break;
-                        
                         case 1:
-                            Fetch();
+                            await Fetch();
                             break;
                         
                         default:
@@ -76,23 +70,7 @@ namespace App.ConsoleApp
             }
         }
 
-        private static void ShowCardsCount()
-        {
-            Directory.CreateDirectory(CardsDirectoryPath);
-            
-            try
-            {
-                using var reader = new StreamReader(SingleFilePath);
-                var cards = JsonConvert.DeserializeObject<ICollection<CardModel>>(reader.ReadToEnd());
-                Console.WriteLine($"You've saved {cards.Count} cards locally.");
-            }
-            catch (Exception)
-            {
-                Console.WriteLine("You don't have any saved cards yet. (Press any key to return to menu)");
-            }
-        }
-
-        private static void Fetch()
+        private static async Task Fetch()
         {
             Console.WriteLine("Loading...");
             
@@ -100,37 +78,33 @@ namespace App.ConsoleApp
             _cardsUrls = new BlockingCollection<string>(_amountOfCards);
             _cardModels = new BlockingCollection<CardModel>(_amountOfCards);
             
-            Console.WriteLine($"There are {_amountOfCardListPages} pages, each containing up to 12 cards.");
-            Console.Write("Want to fetch'em now? (y/n) ");
-            var shouldFetchCards = Console.ReadLine()?.ToLower() == "y";
-            
-            if (!shouldFetchCards) return;
-            
-            SetAmountOfPages();
+            SetAmountOfPagesToFetch();
             SetSavingMode();
-            FetchCards();
+            await FetchCards();
         }
 
-        private static void SetAmountOfPages()
+        private static void SetAmountOfPagesToFetch()
         {
             while (true)
             {
                 try
                 {
-                    Console.Clear();
-                    Console.Write("How many? ");
+                    Console.WriteLine($"There are {_amountOfCardListPages} pages, each containing up to 12 cards.");
+                    Console.Write("How many pages do you want to fetch? ");
 
                     var amountOfPages = int.Parse(Console.ReadLine() ?? throw new Exception());
-                    if (amountOfPages < 0)
+                    if (amountOfPages < 1 || amountOfPages > _amountOfCardListPages)
                         throw new Exception();
 
                     SetAmountOfCards(amountOfPages);
+                    Console.Clear();
                     break;
                 }
                 catch (Exception)
                 {
                     Console.WriteLine("Invalid input. (press any key to try again)");
                     Console.Read();
+                    Console.Clear();
                 }
             }
         }
@@ -144,8 +118,7 @@ namespace App.ConsoleApp
                     Console.Write("How do you want to save the cards? (\"s\" for single file or \"m\" multiple) ");
                     var input = Console.ReadLine()?.ToLower() ?? throw new Exception();
                     
-                    if (input != "s" && input != "m")
-                        throw new Exception();
+                    if (input != "s" && input != "m") throw new Exception();
 
                     _saveInSingleFile = input switch
                     {
@@ -159,7 +132,7 @@ namespace App.ConsoleApp
                 catch (Exception)
                 {
                     Console.WriteLine("Invalid input. (press any key to try again)");
-                    Console.Read();
+                    Console.ReadLine();
                     Console.Clear();
                 }
             }
@@ -191,26 +164,24 @@ namespace App.ConsoleApp
                 _amountOfCardListPages = amountOfPages;
             }
             else
-            {
                 _amountOfCardListPages = pages;
-            }
             
             _amountOfCards = _amountOfCardsInList * _amountOfCardListPages;
-
         }
 
-        private static void FetchCards()
+        private static async Task FetchCards()
         {
-            Task.Run(GetCardsUrls);
-            Task.Run(MapCardModels);
-            Task.Run(SaveCards).Wait();
+            _ = GetCardsUrls();
+            _ = MapCardModels();
+            await Task.Run(SaveCards);
 
             Console.Write("Finished fetching the cards, press any key to return to menu.");
             Console.ReadLine();
         }
 
-        private static void GetCardsUrls()
+        private static async Task GetCardsUrls()
         {
+            var amountProcessedLock = new object();
             var amountProcessed = 0;
             var progressTrackingTask = Task.Run(async () =>
             {
@@ -245,19 +216,17 @@ namespace App.ConsoleApp
                     cardUrl = GetCardPageUrl(cardUrl);
                     _cardsUrls.Add(cardUrl);
 
-                    lock ((object)amountProcessed)
-                    {
-                        amountProcessed++;
-                    }
+                    lock (amountProcessedLock) amountProcessed++;
                 }
             });
 
             _cardsUrls.CompleteAdding();
-            progressTrackingTask.Wait();
+            await progressTrackingTask;
         }
 
-        private static void MapCardModels()
+        private static async Task MapCardModels()
         {
+            var amountProcessedLock = new object();
             var amountProcessed = 0;
             var progressTrackingTask = Task.Run(async () =>
             {
@@ -292,34 +261,59 @@ namespace App.ConsoleApp
                     tasks.Add(new Task(() =>
                     {
                         var cardUrl = _cardsUrls.Take();
-                        var cardModel = Mapper.CardModelFrom(new HtmlWeb().Load(cardUrl), cardUrl);
+                        var cardModel = Mapper.CardModelFrom(new HtmlWeb().Load(cardUrl));
                         _cardModels.Add(cardModel);
-                        amountProcessed++;
+
+                        lock (amountProcessedLock) amountProcessed++;
                     }, TaskCreationOptions.AttachedToParent));
                 }
                 
                 // Starts the batch tasks and wait for them to finish
                 tasks.ForEach(task => task.Start());
-                var tasksFinished = Task.WhenAll(tasks);
-                tasksFinished.Wait();
+                await Task.WhenAll(tasks);
                 
                 // Increments batchesCount
                 batchesCount++;
             }
 
             _cardModels.CompleteAdding();
-            progressTrackingTask.Wait();
+            await progressTrackingTask;
         }
 
-        private static void SaveCards()
+        private static async Task SaveCards()
         {
+            Directory.CreateDirectory(CardsDirectoryPath);
+            File.Open(SingleFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite).Dispose();
+
+            if (_saveInSingleFile)
+            {
+                if (!File.Exists(SingleFilePath)) File.Open(SingleFilePath, FileMode.Create, FileAccess.ReadWrite);
+
+                await Task.WhenAll(
+                    SaveCardsInSingleFile(),
+                    SaveCardsInSingleFile()
+                );
+            }
+            else
+            {
+                await Task.WhenAll(
+                    SaveEachCardInItsOwnFile(),
+                    SaveEachCardInItsOwnFile()
+                );
+            }
+        }
+
+        private static async Task SaveEachCardInItsOwnFile()
+        {
+            var amountProcessedLock = new object();
             var amountProcessed = 0;
+
             var progressTrackingTask = Task.Run(async () =>
             {
                 while (amountProcessed < _amountOfCards)
                 {
                     if (_cardModels.IsCompleted) break;
-                    
+
                     await Task.Delay(100);
 
                     lock (ConsoleWriterLock)
@@ -335,50 +329,50 @@ namespace App.ConsoleApp
                     Console.WriteLine("Saving cards to file completed!".PadRight(Console.WindowWidth, ' '));
                 }
             });
-            
-            Directory.CreateDirectory(CardsDirectoryPath);
 
-            if (_saveInSingleFile)
-            {
-                if (!File.Exists(SingleFilePath)) File.Open(SingleFilePath, FileMode.Create, FileAccess.ReadWrite);
-                
-                Task.WhenAll(
-                    Task.Run(() => SaveCardsInSingleFile(ref amountProcessed)), 
-                    Task.Run(() => SaveCardsInSingleFile(ref amountProcessed))
-                ).Wait();
-            }
-            else
-            {
-                Task.WhenAll(
-                    Task.Run(() => SaveEachCardInItsOwnFile(ref amountProcessed)), 
-                    Task.Run(() => SaveEachCardInItsOwnFile(ref amountProcessed))
-                ).Wait(); 
-            } 
-
-            progressTrackingTask.Wait();
-        }
-
-        private static void SaveEachCardInItsOwnFile(ref int amountProcessed)
-        {
             while (!_cardModels.IsCompleted)
             {
                 if (_cardModels.Count <= 0) continue;
 
                 var cardModel = _cardModels.Take();
-                var cardFilePath = GetCardFilePath(cardModel.Name);
+                var cardFilePath = GetCardFilePath(cardModel.Code, cardModel.Name);
                 File.WriteAllText(cardFilePath, JsonConvert.SerializeObject(cardModel, Formatting.Indented));
                 
-                lock ((object) amountProcessed)
-                {
-                    amountProcessed++;
-                }
+                lock (amountProcessedLock) amountProcessed++;
             }
+
+            await progressTrackingTask;
         }
 
-        private static string GetCardFilePath(string modelName) => string.Concat(CardsDirectoryPath, modelName, ".json");
+        private static string GetCardFilePath(string modelCode, string modelName) => string.Concat(CardsDirectoryPath, modelCode, " - ", modelName, ".json");
 
-        private static void SaveCardsInSingleFile(ref int amountProcessed)
+        private static async Task SaveCardsInSingleFile()
         {
+            var amountProcessedLock = new object();
+            var amountProcessed = 0;
+
+            var progressTrackingTask = Task.Run(async () =>
+            {
+                while (amountProcessed < _amountOfCards)
+                {
+                    if (_cardModels.IsCompleted) break;
+
+                    await Task.Delay(100);
+
+                    lock (ConsoleWriterLock)
+                    {
+                        Console.SetCursorPosition(0, 2);
+                        Console.WriteLine($"Saving cards to file... {amountProcessed} of {_amountOfCards}".PadRight(Console.WindowWidth, ' '));
+                    }
+                }
+
+                lock (ConsoleWriterLock)
+                {
+                    Console.SetCursorPosition(0, 2);
+                    Console.WriteLine("Saving cards to file completed!".PadRight(Console.WindowWidth, ' '));
+                }
+            });
+
             while (!_cardModels.IsCompleted)
             {
                 if (_cardModels.Count <= 0) continue;
@@ -401,9 +395,11 @@ namespace App.ConsoleApp
                     
                     File.WriteAllText(SingleFilePath, JsonConvert.SerializeObject(cards));
 
-                    lock ((object) amountProcessed) amountProcessed++;
+                    lock (amountProcessedLock) amountProcessed++;
                 }
             }
+
+            await progressTrackingTask;
         }
     }
 }
