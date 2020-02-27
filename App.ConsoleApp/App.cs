@@ -38,7 +38,7 @@ namespace App.ConsoleApp
             while (true)
             {
                 Console.Clear();
-                Console.WriteLine(" Pokemon TCG Scrapper ".PadLeft(80, '-').PadRight(150, '-'));
+                ShowAppName();
                 Console.WriteLine("1. Fetch cards");
                 Console.WriteLine("2. Leave");
                 Console.Write("Choose: ");
@@ -46,20 +46,10 @@ namespace App.ConsoleApp
                 try
                 {
                     var choice = int.Parse(Console.ReadLine() ?? throw new Exception());
-                    if (choice <= 0) throw new Exception();
+                    if (choice <= 0 || choice > 2) throw new Exception();
+                    if (choice == 2) return;
 
-                    switch (choice)
-                    {
-                        case 2:
-                            return;
-                        
-                        case 1:
-                            await Fetch();
-                            break;
-                        
-                        default:
-                            throw new Exception();
-                    }
+                    break;
                 }
                 catch (Exception)
                 {
@@ -68,6 +58,17 @@ namespace App.ConsoleApp
                     Console.Clear();
                 }
             }
+
+            await Fetch();
+        }
+
+        private static void ShowAppName()
+        {
+            var appName = "Pokemon TCG Scrapper";
+            var windowWidth = Console.WindowWidth;
+            var leftPadding = new string('-', (windowWidth / 2) - appName.Length) + " ";
+            var rigthPadding = " " + new string('-', (windowWidth / 2) - appName.Length) ;
+            Console.WriteLine($"{leftPadding}{appName}{rigthPadding}");
         }
 
         private static async Task Fetch()
